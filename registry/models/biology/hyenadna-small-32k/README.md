@@ -7,7 +7,9 @@ I ran the pretrained HyenaDNA small-32k model on human DNA and checked whether i
 On a login node:
 
     git clone https://github.com/WilliamChen768/cybershuttle-ai4science-foundry
-    cd cybershuttle-ai4science-foundry/registry/models/biology/hyenadna-small-32k
+    cd cybershuttle-ai4science-foundry
+    git checkout hyenadna-small-32k
+    cd registry/models/biology/hyenadna-small-32k
     bash setup_env.sh
 
 `setup_env.sh` loads the `miniforge/24.3.0-0` module and builds a Python 3.10.21 env with torch 2.5.1+cu121, transformers 5.17.0, numpy 2.2.6, tokenizers 0.23.2, safetensors 0.8.0, and huggingface_hub 1.33.0. Everything needed is pinned in `requirements.txt`. The env lives in `$SCRATCH_DIR/.conda/envs/hyenadna_env` and `$SCRATCH_DIR` defaults to `$HOME/scratch`. The conda and pip caches go to scratch too, since the home quota is only 30 GB.
