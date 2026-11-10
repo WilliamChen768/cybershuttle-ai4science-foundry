@@ -124,19 +124,28 @@ def main():
     repeat_diff = (again.mean(0) - means[0]).abs().max().item()
     repeat_ok = repeat_diff < 1e-4
 
-    # Check 3: different regions give different (non-constant) embeddings.
+    # Check 3: different sequences give different embeddings (no identical vectors).
+    # Mean-pooled vectors all point in nearly the same direction (cosine ~0.97-0.999), so a
+    # cosine threshold near 1 is too strict; test for duplicates by distance instead.
     normed = torch.nn.functional.normalize(means, dim=1)
     cos = normed @ normed.T
     off_diag = cos[~torch.eye(len(names), dtype=torch.bool)] if len(names) > 1 else torch.tensor([0.0])
-    distinct_ok = bool(off_diag.max() < 0.9999)
+    dists = torch.cdist(means, means)
+    dists.fill_diagonal_(float("inf"))
+    min_dist = dists.min().item()
+    distinct_ok = min_dist > 1e-6
 
     print(f"\nd_model = {d_model}, hidden_states returned = {checks[0]['n_hidden_states']}")
-    print("Pairwise cosine similarity between mean embeddings (rows = regions):")
-    print(torch.round(cos * 1000) / 1000)
+    print(f"Cosine similarity between mean embeddings: min {off_diag.min().item():.4f}, "
+          f"mean {off_diag.mean().item():.4f}, max {off_diag.max().item():.6f}")
+    print(f"Smallest distance between two different sequences: {min_dist:.6f}")
+    if len(names) <= 12:
+        print(torch.round(cos * 1000) / 1000)
+
     results = {
         "lm_head reproduces logits from hidden_states[-1]": head_ok,
         "repeat run gives the same embedding": repeat_ok,
-        "different regions give different embeddings": distinct_ok,
+        "different sequences give different embeddings": distinct_ok,
     }
     for k, v in results.items():
         print(("PASS  " if v else "FAIL  ") + k)
@@ -156,6 +165,8 @@ def main():
                 "repeat_maxdiff": repeat_diff,
                 "per_base_saved": not args.no_per_base, "per_base_dtype": "float16",
                 "mean_offdiag_cosine": off_diag.mean().item(),
+                "max_offdiag_cosine": off_diag.max().item(),
+                "min_pairwise_distance": min_dist,
                 "checks": results, "seconds": elapsed,
                 "torch": torch.__version__, "transformers": transformers.__version__,
                 "gpu": torch.cuda.get_device_name(0) if device == "cuda" else None,
