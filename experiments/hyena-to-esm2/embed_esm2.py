@@ -21,6 +21,10 @@ from transformers import AutoTokenizer, EsmForMaskedLM
 from config import OUT_DIR
 
 DEFAULT_MODEL = "facebook/esm2_t6_8M_UR50D"
+# Pinned commits, taken from the "revision_resolved" field of earlier runs.
+ESM2_REVISIONS = {
+    "facebook/esm2_t6_8M_UR50D": "c731040fcd8d73dceaa04b0a8e6329b345b0f5df",
+}
 DEFAULT_FASTA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "genes_protein.fasta")
 MAX_RESIDUES = 1022      # ESM-2 limit: 1024 tokens including <cls> and <eos>
 CHECK_TOL = 1e-3
@@ -63,7 +67,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("fasta", nargs="?", default=DEFAULT_FASTA)
     ap.add_argument("--model", default=DEFAULT_MODEL)
-    ap.add_argument("--revision", default=None, help="HF commit SHA to pin (recorded in the meta file)")
+    ap.add_argument("--revision", default=None,
+                    help="HF commit SHA to pin (default: the pinned one for known models)")
     ap.add_argument("--no-per-residue", action="store_true")
     args = ap.parse_args()
 
@@ -73,8 +78,9 @@ def main():
     print("Device:", device, torch.cuda.get_device_name(0) if device == "cuda" else "")
     print("Model:", args.model)
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.revision)
-    model = EsmForMaskedLM.from_pretrained(args.model, revision=args.revision).to(device).eval()
+    revision = args.revision or ESM2_REVISIONS.get(args.model)
+    tokenizer = AutoTokenizer.from_pretrained(args.model, revision=revision)
+    model = EsmForMaskedLM.from_pretrained(args.model, revision=revision).to(device).eval()
     commit = getattr(model.config, "_commit_hash", None)
     print("Model revision (commit SHA):", commit)
 
@@ -114,11 +120,20 @@ def main():
     repeat_diff = (again.mean(0) - means[0]).abs().max().item()
     repeat_ok = repeat_diff < 1e-4
 
+    # Check 3: different proteins give different embeddings (no identical vectors).
+    # Related proteins (e.g. gene-family members) can have cosine ~1 legitimately, so test for
+    # exact duplicates by distance instead of a cosine threshold near 1.
     normed = torch.nn.functional.normalize(means, dim=1)
     cos = normed @ normed.T
     off_diag = cos[~torch.eye(len(names), dtype=torch.bool)] if len(names) > 1 else torch.tensor([0.0])
-    distinct_ok = bool(off_diag.max() < 0.9999)
-    print(f"d_model = {d_model}; mean off-diagonal cosine between proteins = {off_diag.mean().item():.4f}")
+    dists = torch.cdist(means, means)
+    dists.fill_diagonal_(float("inf"))
+    min_dist = dists.min().item()
+    distinct_ok = min_dist > 1e-6
+    print(f"d_model = {d_model}")
+    print(f"Cosine similarity between mean embeddings: min {off_diag.min().item():.4f}, "
+          f"mean {off_diag.mean().item():.4f}, max {off_diag.max().item():.6f}")
+    print(f"Smallest distance between two different proteins: {min_dist:.6f}")
 
     results = {
         "lm_head reproduces logits from last_hidden_state": head_ok,
@@ -133,11 +148,13 @@ def main():
                os.path.join(OUT_DIR, "esm2_embeddings.pt"))
     with open(os.path.join(OUT_DIR, "esm2_embeddings_meta.json"), "w") as f:
         json.dump({
-            "model": args.model, "revision_requested": args.revision, "revision_resolved": commit,
+            "model": args.model, "revision_requested": revision, "revision_resolved": commit,
             "fasta": os.path.abspath(args.fasta), "n_sequences": len(names), "d_model": d_model,
             "lm_head_maxdiff_max": max(diffs), "repeat_maxdiff": repeat_diff,
             "per_residue_saved": not args.no_per_residue, "per_residue_dtype": "float16",
-            "mean_offdiag_cosine": off_diag.mean().item(), "checks": results, "seconds": elapsed,
+            "mean_offdiag_cosine": off_diag.mean().item(),
+            "max_offdiag_cosine": off_diag.max().item(), "min_pairwise_distance": min_dist,
+            "checks": results, "seconds": elapsed,
             "torch": torch.__version__, "transformers": transformers.__version__,
             "gpu": torch.cuda.get_device_name(0) if device == "cuda" else None,
         }, f, indent=2)
