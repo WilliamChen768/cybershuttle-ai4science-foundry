@@ -7,6 +7,7 @@ with simpler inputs as baselines, so we can tell whether HyenaDNA adds anything:
   - GC fraction, coding length, GC + length
   - codon frequencies (64 numbers: counts the protein's composition directly)
   - HyenaDNA with GC content regressed out
+  - codon frequencies + HyenaDNA vectors shuffled between genes (is the gain just extra inputs?)
   - amino-acid composition of the protein itself (reference ceiling: it is derived from the target)
   - training mean (no input) and HyenaDNA with shuffled gene-protein pairs (controls)
 
@@ -176,6 +177,7 @@ def run_experiment(H, Y, gc, length, codon, aa, proteins, args):
 
     order = ["HyenaDNA embedding", "HyenaDNA, GC regressed out", "GC fraction", "Coding length",
              "GC + length", "Codon frequencies", "HyenaDNA + codon frequencies",
+             "Codon frequencies + shuffled HyenaDNA (control)",
              "Amino-acid composition (reference)", "Training mean (no input)",
              "HyenaDNA, shuffled pairs (control)"]
     results = {k: [] for k in order}
@@ -196,6 +198,10 @@ def run_experiment(H, Y, gc, length, codon, aa, proteins, args):
             "GC + length": np.column_stack([gc, length]),
             "Codon frequencies": codon,
             "HyenaDNA + codon frequencies": np.column_stack([H, codon]),
+            # same number of inputs as the row above, but the HyenaDNA vectors are assigned to the
+            # wrong genes: shows how much of the gain comes from simply having more input columns
+            "Codon frequencies + shuffled HyenaDNA (control)": np.column_stack(
+                [H[rng.permutation(n)], codon]),
             "Amino-acid composition (reference)": aa,
         }
         for label, X in sets.items():
@@ -223,10 +229,11 @@ def format_table(order, results, n_test_example):
         return f"{np.nanmean(v):.1f}% +- {np.nanstd(v):.1f}" if pct else f"{np.nanmean(v):+.3f} +- {np.nanstd(v):.3f}"
 
     chance1 = 100.0 / n_test_example
-    lines = [f"{'Input features':<38}{'R2':>16}{'Cosine':>16}{'Top-1 %':>16}{'Top-5 %':>16}",
-             "-" * 102]
+    w = max(len(label) for label in order) + 2
+    lines = [f"{'Input features':<{w}}{'R2':>16}{'Cosine':>16}{'Top-1 %':>16}{'Top-5 %':>16}",
+             "-" * (w + 64)]
     for label in order:
-        lines.append(f"{label:<38}{ms(label, 'r2'):>16}{ms(label, 'cos'):>16}"
+        lines.append(f"{label:<{w}}{ms(label, 'r2'):>16}{ms(label, 'cos'):>16}"
                      f"{ms(label, 'top1', True):>16}{ms(label, 'top5', True):>16}")
     lines.append(f"(retrieval chance is about {chance1:.1f}% for top-1 and {5 * chance1:.1f}% for top-5)")
     return "\n".join(lines)
